@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--w-edge", type=float, default=0.05)
     p.add_argument("--w-cons", type=float, default=0.05)
     p.add_argument("--amp", action="store_true")
+    p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume training from")
     return p.parse_args()
 
 
@@ -117,10 +118,22 @@ def main() -> None:
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
     scaler = torch.amp.GradScaler(enabled=args.amp and device.type == "cuda")
 
+    start_epoch = 1
     best_psnr = -1.0
     log_path = save_dir / "train_log.jsonl"
 
-    for epoch in range(1, args.epochs + 1):
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location="cpu")
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
+        if "scaler" in ckpt:
+            scaler.load_state_dict(ckpt["scaler"])
+        start_epoch = int(ckpt.get("epoch", 0)) + 1
+        best_psnr = float(ckpt.get("best_psnr", -1.0))
+        print(f"Resumed from {args.resume} at epoch {start_epoch}")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         running = []
 
@@ -166,6 +179,7 @@ def main() -> None:
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict(),
                 "epoch": epoch,
                 "best_psnr": best_psnr,
                 "args": vars(args),
@@ -179,6 +193,9 @@ def main() -> None:
             torch.save(
                 {
                     "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "scaler": scaler.state_dict(),
                     "epoch": epoch,
                     "best_psnr": best_psnr,
                     "args": vars(args),

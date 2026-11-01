@@ -58,6 +58,7 @@ class GaussianNoisyPairDataset(Dataset):
         fixed_sigma: float | None = None,
         train: bool = True,
         seed: int = 42,
+        eval_patch_size: int | None = None,
     ) -> None:
         self.root = Path(root)
         self.split = split
@@ -66,6 +67,7 @@ class GaussianNoisyPairDataset(Dataset):
         self.sigma_max = sigma_max
         self.fixed_sigma = fixed_sigma
         self.train = train
+        self.eval_patch_size = eval_patch_size if eval_patch_size is not None else patch_size
         self.rng = np.random.default_rng(seed)
 
         folder = self.root / split
@@ -88,6 +90,11 @@ class GaussianNoisyPairDataset(Dataset):
         if self.train:
             clean = random_crop(clean, self.patch_size, self.rng)
             clean = augment(clean, self.rng)
+        elif self.eval_patch_size is not None and min(clean.shape[1:]) > self.eval_patch_size:
+            h, w = clean.shape[1], clean.shape[2]
+            top = max(0, (h - self.eval_patch_size) // 2)
+            left = max(0, (w - self.eval_patch_size) // 2)
+            clean = clean[:, top : top + self.eval_patch_size, left : left + self.eval_patch_size]
 
         sigma = self._sample_sigma()
         sigma_norm = sigma / 255.0
