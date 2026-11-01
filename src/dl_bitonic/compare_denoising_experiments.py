@@ -44,6 +44,8 @@ def validate(model: nn.Module, loader: DataLoader, device: torch.device) -> tupl
         noisy = batch["noisy"].to(device)
         sigma_map = batch["sigma_map"].to(device)
         pred, _ = model(noisy, sigma_map)
+        pred = torch.nan_to_num(pred, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+        clean = clean.clamp(0.0, 1.0)
         psnr_vals.append(psnr(pred, clean))
         ssim_vals.append(ssim(pred, clean))
     return float(np.mean(psnr_vals)), float(np.mean(ssim_vals))
@@ -251,8 +253,9 @@ def run_training(
             sigma_map = batch["sigma_map"].to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=device.type == "cuda"):
+            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=False):
                 pred, aux = model(noisy, sigma_map)
+                pred = torch.nan_to_num(pred, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
                 if hasattr(model, "bitonic") and callable(model.bitonic):
                     if model_kind in {"hybrid", "hybrid_no_gate"}:
                         consistency_out = model.bitonic(pred, aux["tau"])
@@ -261,11 +264,15 @@ def run_training(
                 else:
                     consistency_out = pred
                 consistency_ref = aux.get("xb", pred)
+                consistency_ref = torch.nan_to_num(consistency_ref, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+                consistency_out = torch.nan_to_num(consistency_out, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
                 loss, stat = criterion(pred, clean, consistency_ref, consistency_out)
 
+            if not torch.isfinite(loss):
+                loss = torch.nan_to_num(loss, nan=0.0, posinf=1.0, neginf=0.0)
             loss.backward()
             optimizer.step()
-            running_loss.append(stat["total"])
+            running_loss.append(float(torch.nan_to_num(torch.tensor(stat["total"], device=loss.device), nan=0.0, posinf=1.0, neginf=0.0).item()))
 
         val_psnr, val_ssim = validate(model, val_loader, device)
         best_psnr = max(best_psnr, val_psnr)

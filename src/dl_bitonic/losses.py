@@ -15,6 +15,8 @@ def _gaussian_window(channels: int, kernel_size: int = 11, sigma: float = 1.5) -
 
 
 def ssim_loss(x: torch.Tensor, y: torch.Tensor, kernel_size: int = 11) -> torch.Tensor:
+    x = x.float()
+    y = y.float()
     c = x.shape[1]
     w = _gaussian_window(c, kernel_size=kernel_size).to(x.device, x.dtype)
     padding = kernel_size // 2
@@ -30,12 +32,16 @@ def ssim_loss(x: torch.Tensor, y: torch.Tensor, kernel_size: int = 11) -> torch.
     sigma_y2 = F.conv2d(y * y, w, padding=padding, groups=c) - mu_y2
     sigma_xy = F.conv2d(x * y, w, padding=padding, groups=c) - mu_xy
 
+    sigma_x2 = sigma_x2.clamp_min(0.0)
+    sigma_y2 = sigma_y2.clamp_min(0.0)
+
     c1 = 0.01**2
     c2 = 0.03**2
 
     ssim_n = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
     ssim_d = (mu_x2 + mu_y2 + c1) * (sigma_x2 + sigma_y2 + c2)
-    ssim_map = ssim_n / (ssim_d + 1e-8)
+    ssim_d = ssim_d.clamp_min(1e-8)
+    ssim_map = ssim_n / ssim_d
     return 1.0 - ssim_map.mean()
 
 

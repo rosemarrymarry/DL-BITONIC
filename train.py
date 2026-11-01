@@ -160,12 +160,11 @@ def main() -> None:
             sigma_map = batch["sigma_map"].to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=args.amp and device.type == "cuda"):
+            # Mixed precision is disabled for the loss path to avoid NaN in SSIM-like terms and
+            # keep the first training epoch numerically stable.
+            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=False):
                 pred, aux = model(noisy, sigma_map)
                 consistency_out = model.bitonic(pred, aux["tau"])
-                # Use the bitonic prior output as the consistency reference rather than the
-                # network prediction itself. This avoids collapsing the hybrid branch toward
-                # its own smoothed output and preserves a meaningful structural constraint.
                 loss, stat = criterion(pred, clean, aux["xb"], consistency_out)
 
             scaler.scale(loss).backward()
