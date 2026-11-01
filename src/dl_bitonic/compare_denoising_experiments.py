@@ -166,6 +166,37 @@ def run_training(
         "sigma_values": sigma_values,
     }
 
+    if model_kind == "traditional":
+        model = make_model(model_kind, device=device, base_ch=base_ch)
+        val_patch_size = patch_size if val_patch_size is None else val_patch_size
+        val_set = GaussianNoisyPairDataset(
+            root=data_root,
+            split="val",
+            patch_size=val_patch_size,
+            fixed_sigma=25.0,
+            train=False,
+            seed=seed,
+            eval_patch_size=val_patch_size,
+        )
+        if max_val_samples is not None:
+            keep = list(range(min(len(val_set), max_val_samples)))
+            val_set = torch.utils.data.Subset(val_set, keep)
+        val_loader = DataLoader(
+            val_set,
+            batch_size=val_batch_size,
+            shuffle=False,
+            num_workers=max(workers // 2, 1),
+            pin_memory=torch.cuda.is_available(),
+        )
+        val_psnr, val_ssim = validate(model, val_loader, device)
+        out["val_psnr"] = float(val_psnr)
+        out["val_ssim"] = float(val_ssim)
+        out["loss"] = float("nan")
+        save_dir = Path(save_root) / model_kind
+        save_dir.mkdir(parents=True, exist_ok=True)
+        (save_dir / "metrics.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
+        return out
+
     model = make_model(model_kind, device=device, base_ch=base_ch)
     criterion = CompositeLoss(w_ssim=0.2, w_edge=0.05, w_cons=0.05)
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -229,7 +260,8 @@ def run_training(
                         consistency_out = pred
                 else:
                     consistency_out = pred
-                loss, stat = criterion(pred, clean, pred, consistency_out)
+                consistency_ref = aux.get("xb", pred)
+                loss, stat = criterion(pred, clean, consistency_ref, consistency_out)
 
             loss.backward()
             optimizer.step()
