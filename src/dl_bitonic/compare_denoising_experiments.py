@@ -270,9 +270,11 @@ def run_training(
         val_psnr, val_ssim = validate(model, val_loader, device)
         best_psnr = max(best_psnr, val_psnr)
         best_ssim = max(best_ssim, val_ssim)
+        epoch_loss = float(np.mean(running_loss))
         out["val_psnr"] = best_psnr
         out["val_ssim"] = best_ssim
-        out["loss"] = float(np.mean(running_loss))
+        out["loss"] = epoch_loss
+        print(f"[{model_kind}] epoch={epoch:02d} train_loss={epoch_loss:.4f} val_psnr={val_psnr:.4f} val_ssim={val_ssim:.4f}")
 
     save_dir = Path(save_root) / model_kind
     save_dir.mkdir(parents=True, exist_ok=True)
