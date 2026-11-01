@@ -37,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--w-edge", type=float, default=0.05)
     p.add_argument("--w-cons", type=float, default=0.05)
     p.add_argument("--amp", action="store_true")
+    p.add_argument("--val-batch-size", type=int, default=1)
+    p.add_argument("--val-patch-size", type=int, default=32, help="Reduce validation crop size to control bitonic memory use")
+    p.add_argument("--max-val-samples", type=int, default=4, help="Limit validation set size to avoid VRAM spikes on Kaggle")
+    p.add_argument("--kaggle-safe", action="store_true", help="Use a conservative batch/patch configuration for low-memory Kaggle runs")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume training from")
     return p.parse_args()
 
@@ -66,6 +70,15 @@ def validate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
 
 def main() -> None:
     args = parse_args()
+    if args.kaggle_safe:
+        args.batch_size = 1
+        args.patch_size = min(args.patch_size, 32)
+        args.val_batch_size = 1
+        args.val_patch_size = min(args.val_patch_size, 32)
+        args.max_val_samples = min(args.max_val_samples, 4)
+        args.workers = max(1, min(args.workers, 2))
+        args.epochs = max(1, min(args.epochs, 20))
+
     set_seed(args.seed)
 
     save_dir = Path(args.save_dir)
@@ -86,11 +99,14 @@ def main() -> None:
     val_set = GaussianNoisyPairDataset(
         root=args.data_root,
         split="val",
-        patch_size=args.patch_size,
+        patch_size=args.val_patch_size,
         fixed_sigma=25.0,
         train=False,
         seed=args.seed,
+        eval_patch_size=args.val_patch_size,
     )
+    if args.max_val_samples is not None and args.max_val_samples > 0:
+        val_set = torch.utils.data.Subset(val_set, list(range(min(len(val_set), args.max_val_samples))))
 
     train_loader = DataLoader(
         train_set,
@@ -102,7 +118,7 @@ def main() -> None:
     )
     val_loader = DataLoader(
         val_set,
-        batch_size=1,
+        batch_size=args.val_batch_size,
         shuffle=False,
         num_workers=max(args.workers // 2, 1),
         pin_memory=torch.cuda.is_available(),
@@ -147,7 +163,10 @@ def main() -> None:
             with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=args.amp and device.type == "cuda"):
                 pred, aux = model(noisy, sigma_map)
                 consistency_out = model.bitonic(pred, aux["tau"])
-                loss, stat = criterion(pred, clean, pred, consistency_out)
+                # Use the bitonic prior output as the consistency reference rather than the
+                # network prediction itself. This avoids collapsing the hybrid branch toward
+                # its own smoothed output and preserves a meaningful structural constraint.
+                loss, stat = criterion(pred, clean, aux["xb"], consistency_out)
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)

@@ -86,7 +86,11 @@ class HybridNoGate(nn.Module):
     def forward(self, y: torch.Tensor, sigma_map: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         x_hat, aux = self.model(y, sigma_map)
         aux["gate"] = torch.zeros_like(aux["gate"])
-        return x_hat, aux
+        # Force the branch to reduce to the CNN output for a true no-gate ablation.
+        x_no_gate = aux["xd"]
+        aux["xb"] = x_no_gate
+        aux["tau"] = torch.full_like(aux["tau"], 0.08)
+        return x_no_gate, aux
 
 
 def make_model(kind: str, device: torch.device, base_ch: int = 32) -> nn.Module:
