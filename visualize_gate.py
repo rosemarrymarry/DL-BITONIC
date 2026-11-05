@@ -14,7 +14,7 @@ from src.dl_bitonic.model import BitonicGuidedDenoiser
 
 
 def main() -> None:
-    ckpt_path = Path("/kaggle/working/runs/exp1/best.pt")
+    ckpt_path = Path("/kaggle/working/DL-BITONIC/src/dl_bitonic/best-120.pt")
     data_root = Path("/kaggle/working/div2k")
     save_dir = Path("/kaggle/working/gate_vis")
     save_dir.mkdir(parents=True, exist_ok=True)
