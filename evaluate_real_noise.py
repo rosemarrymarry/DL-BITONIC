@@ -50,15 +50,25 @@ def resize_to_max_side(img: torch.Tensor, max_side: int = 512) -> torch.Tensor:
 def normalize_name(name: str) -> str:
     name = Path(name).name
     low = name.lower()
+
     for prefix in ("noisy_", "gt_", "noisy", "gt"):
         if low.startswith(prefix):
             name = name[len(prefix):]
+            low = name.lower()
             break
-    if "_srgb_" in low:
-        name = name.split("_srgb_", 1)[1]
-    if "_rgb_" in low:
-        name = name.split("_rgb_", 1)[1]
-    return name.lower()
+
+    for marker in ("_srgb_", "_rgb_", "_srgb", "_rgb"):
+        if marker in low:
+            name = name.split(marker, 1)[1]
+            low = name.lower()
+            break
+
+    # Keep only the stable filename suffix for matching dirty/clean pairs.
+    if low.endswith(".png"):
+        low = low[:-4]
+        name = name[:-4]
+
+    return name.lower().replace(" ", "")
 
 
 class RealNoisyPairDataset(Dataset):
