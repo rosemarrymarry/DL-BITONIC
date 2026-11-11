@@ -33,6 +33,20 @@ def center_crop_pair(noisy: torch.Tensor, clean: torch.Tensor) -> tuple[torch.Te
     return noisy, clean
 
 
+def resize_to_max_side(img: torch.Tensor, max_side: int = 512) -> torch.Tensor:
+    h, w = img.shape[1], img.shape[2]
+    if max(h, w) <= max_side:
+        return img
+
+    scale = max_side / float(max(h, w))
+    new_h = max(1, int(round(h * scale)))
+    new_w = max(1, int(round(w * scale)))
+    pil = Image.fromarray((img.permute(1, 2, 0).numpy() * 255.0).astype(np.uint8))
+    pil = pil.resize((new_w, new_h), Image.BICUBIC)
+    arr = np.asarray(pil, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr).permute(2, 0, 1).contiguous()
+
+
 def normalize_name(name: str) -> str:
     name = Path(name).name
     low = name.lower()
@@ -48,10 +62,11 @@ def normalize_name(name: str) -> str:
 
 
 class RealNoisyPairDataset(Dataset):
-    def __init__(self, noisy_root: str | Path, clean_root: str | Path, sigma: float = 25.0, max_samples: int | None = None):
+    def __init__(self, noisy_root: str | Path, clean_root: str | Path, sigma: float = 25.0, max_samples: int | None = None, max_side: int = 512):
         self.noisy_root = Path(noisy_root)
         self.clean_root = Path(clean_root)
         self.sigma = float(sigma)
+        self.max_side = int(max_side)
 
         noisy_files = sorted([p for p in self.noisy_root.rglob("*") if p.is_file() and p.suffix.lower() in VALID_SUFFIXES])
         clean_files = sorted([p for p in self.clean_root.rglob("*") if p.is_file() and p.suffix.lower() in VALID_SUFFIXES])
@@ -81,6 +96,8 @@ class RealNoisyPairDataset(Dataset):
         noisy = load_rgb(noisy_path)
         clean = load_rgb(clean_path)
         noisy, clean = center_crop_pair(noisy, clean)
+        noisy = resize_to_max_side(noisy, self.max_side)
+        clean = resize_to_max_side(clean, self.max_side)
 
         sigma_map = torch.full((1, noisy.shape[1], noisy.shape[2]), self.sigma / 75.0, dtype=noisy.dtype)
         return {
@@ -101,14 +118,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument("--max-side", type=int, default=512, help="Reduce large images to this max side to avoid bitonic OOM on Kaggle.")
     parser.add_argument("--save-json", type=str, default="", help="Optional path to save evaluation JSON.")
     return parser.parse_args()
 
 
-def evaluate_single_pair(model: torch.nn.Module, noisy_img: str | Path, clean_img: str | Path, sigma: float, device: torch.device) -> dict[str, float]:
+def evaluate_single_pair(model: torch.nn.Module, noisy_img: str | Path, clean_img: str | Path, sigma: float, device: torch.device, max_side: int = 512) -> dict[str, float]:
     noisy = load_rgb(noisy_img)
     clean = load_rgb(clean_img)
     noisy, clean = center_crop_pair(noisy, clean)
+    noisy = resize_to_max_side(noisy, max_side)
+    clean = resize_to_max_side(clean, max_side)
 
     sigma_map = torch.full((1, noisy.shape[1], noisy.shape[2]), sigma / 75.0, dtype=noisy.dtype)
     noisy = noisy.unsqueeze(0).to(device)
@@ -140,7 +160,7 @@ def main() -> None:
     model.eval()
 
     if args.noisy_img and args.clean_img:
-        result = evaluate_single_pair(model, args.noisy_img, args.clean_img, args.sigma, device)
+        result = evaluate_single_pair(model, args.noisy_img, args.clean_img, args.sigma, device, max_side=args.max_side)
         print(json.dumps({"single_pair": True, **result}, indent=2))
         if args.save_json:
             Path(args.save_json).write_text(json.dumps({"single_pair": True, **result}, indent=2), encoding="utf-8")
@@ -154,6 +174,7 @@ def main() -> None:
         clean_root=args.clean_root,
         sigma=args.sigma,
         max_samples=args.max_samples,
+        max_side=args.max_side,
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
 
