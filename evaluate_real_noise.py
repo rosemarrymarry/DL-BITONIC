@@ -48,27 +48,34 @@ def resize_to_max_side(img: torch.Tensor, max_side: int = 512) -> torch.Tensor:
 
 
 def normalize_name(name: str) -> str:
-    name = Path(name).name
-    low = name.lower()
+    name = Path(name).name.lower()
+
+    # Strip the RGB / sRGB marker before the noisy/gt prefix so names like
+    # NOISY_SRGB_010.PNG and GT_SRGB_010.PNG collapse to the same key.
+    for marker in ("_srgb_", "_rgb_", "_srgb", "_rgb"):
+        if marker in name:
+            name = name.split(marker, 1)[1]
+            break
 
     for prefix in ("noisy_", "gt_", "noisy", "gt"):
-        if low.startswith(prefix):
+        if name.startswith(prefix):
             name = name[len(prefix):]
-            low = name.lower()
             break
 
-    for marker in ("_srgb_", "_rgb_", "_srgb", "_rgb"):
-        if marker in low:
-            name = name.split(marker, 1)[1]
-            low = name.lower()
-            break
+    if Path(name).suffix.lower() in VALID_SUFFIXES:
+        name = Path(name).stem
 
-    # Keep only the stable filename suffix for matching dirty/clean pairs.
-    if low.endswith(".png"):
-        low = low[:-4]
-        name = name[:-4]
+    return name.replace(" ", "")
 
-    return name.lower().replace(" ", "")
+
+def _is_noisy_like(path: Path) -> bool:
+    low = path.name.lower()
+    return low.startswith("noisy") or "_noisy" in low or "noisy_" in low
+
+
+def _is_clean_like(path: Path) -> bool:
+    low = path.name.lower()
+    return low.startswith("gt") or low.startswith("clean") or "_gt" in low or "gt_" in low or "_clean" in low or "clean_" in low
 
 
 class RealNoisyPairDataset(Dataset):
@@ -78,15 +85,26 @@ class RealNoisyPairDataset(Dataset):
         self.sigma = float(sigma)
         self.max_side = int(max_side)
 
-        noisy_files = sorted([p for p in self.noisy_root.rglob("*") if p.is_file() and p.suffix.lower() in VALID_SUFFIXES])
-        clean_files = sorted([p for p in self.clean_root.rglob("*") if p.is_file() and p.suffix.lower() in VALID_SUFFIXES])
+        noisy_files = sorted([
+            p for p in self.noisy_root.rglob("*")
+            if p.is_file() and p.suffix.lower() in VALID_SUFFIXES and (_is_noisy_like(p) or not _is_clean_like(p))
+        ])
+        clean_files = sorted([
+            p for p in self.clean_root.rglob("*")
+            if p.is_file() and p.suffix.lower() in VALID_SUFFIXES and (_is_clean_like(p) or not _is_noisy_like(p))
+        ])
 
-        clean_map = {normalize_name(p.name): p for p in clean_files}
+        clean_map: dict[str, Path] = {}
+        for p in clean_files:
+            key = normalize_name(p.name)
+            if key not in clean_map or _is_clean_like(p) and not _is_noisy_like(clean_map[key]):
+                clean_map[key] = p
+
         self.pairs: list[tuple[Path, Path]] = []
         for noisy_path in noisy_files:
             key = normalize_name(noisy_path.name)
             clean_path = clean_map.get(key)
-            if clean_path is not None:
+            if clean_path is not None and clean_path.resolve() != noisy_path.resolve():
                 self.pairs.append((noisy_path, clean_path))
 
         if len(self.pairs) == 0:
